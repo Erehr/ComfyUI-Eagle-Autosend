@@ -3,6 +3,7 @@ import csv
 import json
 import server
 from aiohttp import web
+from .eagle_autosend import send_to_eagle_endpoint
 
 # Set up the API routes
 @server.PromptServer.instance.routes.get("/eagle/get_settings")

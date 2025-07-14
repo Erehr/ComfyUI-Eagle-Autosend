@@ -5,7 +5,7 @@ from aiohttp import web
 from PIL import Image
 
 from .eagle_api import EagleAPI
-from .settings import get_eagle_settings, filter_tags_with_csv
+from . import settings
 
 def get_positive_prompt(parameters_text):
     """Extracts the positive prompt from the full parameter string."""
@@ -25,7 +25,7 @@ async def send_to_eagle_endpoint(request):
         return web.Response(status=400, text="Invalid request: filename or subfolder missing")
 
     try:
-        settings = get_eagle_settings()
+        current_settings = settings.get_eagle_settings()
         absolute_path = os.path.join(subfolder, filename)
 
         if not os.path.exists(absolute_path):
@@ -41,7 +41,7 @@ async def send_to_eagle_endpoint(request):
             positive_prompt_text = get_positive_prompt(parameters_text)
 
             # 1. Determine Annotation
-            anno_setting = settings.get('eagle.autosend.annotation', 'Parameters')
+            anno_setting = current_settings.get('eagle.autosend.annotation', 'Parameters')
             if anno_setting == 'Parameters':
                 annotation = parameters_text
             elif anno_setting == 'Prompt':
@@ -53,11 +53,11 @@ async def send_to_eagle_endpoint(request):
                 annotation = positive_prompt_text
 
             # 2. Determine Tags
-            tags_setting = settings.get('eagle.autosend.tags', 'Positive')
+            tags_setting = current_settings.get('eagle.autosend.tags', 'Positive')
             if tags_setting != 'None':
                 raw_tags = [tag.strip() for tag in positive_prompt_text.split(',') if tag.strip()]
                 if tags_setting == 'Positive (filtered)':
-                    tags = filter_tags_with_csv(raw_tags, settings.get('eagle.autosend.tagsCsv'), settings.get('eagle.autosend.tagsAlias'))
+                    tags = settings.filter_tags_with_csv(raw_tags, current_settings.get('eagle.autosend.tagsCsv'), current_settings.get('eagle.autosend.tagsAlias'))
                 else: # 'Positive'
                     tags = raw_tags
 
@@ -69,8 +69,8 @@ async def send_to_eagle_endpoint(request):
         }
         
         # Create a new EagleAPI instance with host and token from settings
-        host_url = settings.get('eagle.autosend.hostUrl', 'http://localhost:41595')
-        token = settings.get('eagle.autosend.token')
+        host_url = current_settings.get('eagle.autosend.hostUrl', 'http://localhost:41595')
+        token = current_settings.get('eagle.autosend.token')
         eagle_api_instance = EagleAPI(base_url=host_url, token=token)
         
         folder_id = eagle_api_instance.find_or_create_folder(folder_name) if folder_name else None

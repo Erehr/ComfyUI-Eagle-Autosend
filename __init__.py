@@ -1,6 +1,6 @@
 import server
-from .py.settings import get_eagle_settings, save_eagle_settings, list_csv_files_endpoint
-from .py.eagle_autosend import send_to_eagle_endpoint
+from .py import settings
+from .py import eagle_autosend
 
 # Define what is exposed to the web
 WEB_DIRECTORY = "js"
