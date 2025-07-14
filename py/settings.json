@@ -2,9 +2,9 @@
     "eagle.autosend.hostUrl": "http://localhost:41595",
     "eagle.autosend.token": "",
     "eagle.autosend.enable": true,
-    "eagle.autosend.folderName": "Illustrious",
-    "eagle.autosend.annotation": "None",
+    "eagle.autosend.folderName": "",
+    "eagle.autosend.annotation": "Positive Prompt",
     "eagle.autosend.tags": "Positive (filtered)",
-    "eagle.autosend.tagsCsv": "danbooru.csv",
+    "eagle.autosend.tagsCsv": "danbooru_e621_merged.csv",
     "eagle.autosend.tagsAlias": "Use main"
 }
