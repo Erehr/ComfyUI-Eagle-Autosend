@@ -1,0 +1,14 @@
+[project]
+name = "comfyui-eagle-autosend"
+description = "A seamless, node-independent way to automatically send your ComfyUI generations to Eagle, complete with full metadata annotation and tags."
+version = "1.0.2"
+license = { file = "LICENSE.txt" }
+dependencies  = []
+
+[project.urls]
+Repository = "https://github.com/Erehr/ComfyUI-Eagle-Autosend"
+
+[tool.comfy]
+PublisherId = "erehr"
+DisplayName = "ComfyUI-Eagle-Autosend" 
+Icon = ""
