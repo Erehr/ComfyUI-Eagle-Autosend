@@ -40,3 +40,4 @@ Thumbs.db
 *.log 
 __csv__/
 py/settings.json
+py/settings.json

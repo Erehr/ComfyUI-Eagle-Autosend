@@ -2,11 +2,33 @@ import requests
 from urllib.parse import urlparse
 from typing import Dict, Optional, TypedDict, List
 
+
+class EagleUnavailable(Exception):
+    """
+    Raised when the Eagle application cannot be reached at all - not running,
+    wrong host/port, or blocked by a firewall.
+
+    Deliberately NOT a subclass of requests.RequestException so that the
+    best-effort `except requests.RequestException` handlers below don't swallow
+    it: "Eagle is closed" has to reach the caller so it can be reported once,
+    quietly, instead of surfacing as a traceback per image.
+    """
+
+    def __init__(self, base_url, original=None):
+        self.base_url = base_url
+        self.original = original
+        super().__init__(f"Eagle is not reachable at {base_url}")
+
+
 class FolderInfo(TypedDict):
     id: str
     name: str
 
 class EagleAPI:
+    # (connect, read) timeout in seconds. A short connect timeout keeps a
+    # closed Eagle from stalling the ComfyUI request handler.
+    TIMEOUT = (3, 30)
+
     def __init__(self, base_url="http://localhost:41595", token=None):
         self.base_url = base_url
         self.token = token
@@ -60,18 +82,22 @@ class EagleAPI:
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-            
+
         try:
             if method == "GET":
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, headers=headers, timeout=self.TIMEOUT)
             elif method == "POST":
-                response = requests.post(url, headers=headers, json=data)
+                response = requests.post(url, headers=headers, json=data, timeout=self.TIMEOUT)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             response.raise_for_status()
             return response.json()
+        except (requests.ConnectionError, requests.Timeout) as e:
+            # Eagle is closed / unreachable. Raise a clean, quiet exception -
+            # `from None` drops the noisy urllib3 chain from any traceback.
+            raise EagleUnavailable(self.base_url, e) from None
         except requests.RequestException as e:
-            print(f"Eagle request failed: {e}")
+            print(f"[Eagle Autosend] Eagle request failed: {e}")
             raise
 
     def _extract_id_name_pairs(self, data):
