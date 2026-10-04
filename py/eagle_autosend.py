@@ -1,7 +1,10 @@
 import os
 import json
 import time
+import asyncio
+import threading
 import traceback
+import requests
 from aiohttp import web
 from PIL import Image
 
@@ -16,11 +19,6 @@ from .eagle_api import EagleAPI, EagleUnavailable
 from . import settings
 
 LOG = "[Eagle Autosend]"
-
-# When Eagle is closed, don't retry (and don't re-log) for every image in a
-# batch. After a failed connection we stay quiet for this many seconds.
-OFFLINE_BACKOFF_SECONDS = 30.0
-_offline_until = 0.0
 
 
 def get_positive_prompt(parameters_text):
@@ -89,24 +87,125 @@ def resolve_image_path(filename, subfolder, image_type="output"):
     return None, tried
 
 
-def _skipped_response(host_url, filename, quiet):
-    """503 = Eagle isn't there. The frontend treats this as 'skip', not 'error'."""
-    return web.json_response(
-        {
-            "status": "skipped",
-            "reason": "eagle_offline",
-            "host": host_url,
-            "filename": filename,
-            # `quiet` means we already told the user about this outage.
-            "quiet": quiet,
-        },
-        status=503,
-    )
+_queue_lock = threading.Lock()
+_flush_lock = threading.Lock()
+
+
+def _queue_file():
+    return os.path.join(folder_paths.get_user_directory(), "__eagle_autosend", "queue.json")
+
+
+def same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def load_queue():
+    path = _queue_file()
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+    except ValueError as e:
+        # Move it aside so the next save does not overwrite entries that could still be recovered by hand.
+        bad = f"{path}.bad-{int(time.time())}"
+        os.replace(path, bad)
+        print(f"{LOG} queue file unreadable ({e}), moved to {bad}")
+        return []
+
+
+def _save_queue(entries):
+    path = _queue_file()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=1)
+    os.replace(tmp, path)
+
+
+def enqueue(entry):
+    with _queue_lock:
+        entries = [e for e in load_queue() if e["path"] != entry["path"]]
+        entries.append(entry)
+        _save_queue(entries)
+
+
+def flush_queue(api):
+    """
+    Sends every queued item whose target library is open in Eagle (blank target = whatever is open).
+    Raises EagleUnavailable when Eagle is closed; items sent before that are still removed from the queue.
+    """
+    with _flush_lock:
+        with _queue_lock:
+            entries = load_queue()
+        result = {"sent": set(), "dropped": set(), "pending": len(entries), "current": None}
+        if not entries:
+            return result
+
+        current = result["current"] = api.current_library()
+        folder_ids = {}
+        try:
+            for e in entries:
+                if e.get("library") and not (current and same_path(e["library"], current)):
+                    continue
+                if not os.path.isfile(e["path"]):
+                    print(f"{LOG} dropping queued {e['path']}: file no longer exists")
+                    result["dropped"].add(e["path"])
+                    continue
+                folder = e.get("folder") or ""
+                if folder not in folder_ids:
+                    folder_ids[folder] = api.find_or_create_folder(folder) if folder else None
+                item = {k: e[k] for k in ("path", "name", "annotation", "tags")}
+                response = api.add_item_from_path(item, folder_id=folder_ids[folder])
+                if (response or {}).get("status") == "success":
+                    print(f"{LOG} sent {e['path']} -> Eagle (folder={folder or 'library root'}, {len(e['tags'])} tags)")
+                    result["sent"].add(e["path"])
+                else:
+                    print(f"{LOG} Eagle refused {e['path']}, dropping it from the queue: {response}")
+                    result["dropped"].add(e["path"])
+        except requests.RequestException:
+            pass  # Already logged by EagleAPI; the rest stays queued for the next attempt.
+        finally:
+            done = result["sent"] | result["dropped"]
+            with _queue_lock:
+                remaining = [e for e in load_queue() if e["path"] not in done]
+                _save_queue(remaining)
+            result["pending"] = len(remaining)
+        return result
+
+
+def eagle_from_settings():
+    current_settings = settings.get_eagle_settings()
+    host_url = current_settings.get('eagle.autosend.hostUrl', 'http://localhost:41595')
+    return EagleAPI(base_url=host_url, token=current_settings.get('eagle.autosend.token')), host_url
+
+
+async def sync_endpoint(request):
+    api, host_url = eagle_from_settings()
+    try:
+        result = await asyncio.to_thread(flush_queue, api)
+    except EagleUnavailable:
+        return web.json_response({"status": "offline", "host": host_url, "pending": len(load_queue())})
+    return web.json_response({"status": "ok", "sent": len(result["sent"]), "pending": result["pending"], "current": result["current"]})
+
+
+async def libraries_endpoint(request):
+    api, host_url = eagle_from_settings()
+    try:
+        current = await asyncio.to_thread(api.current_library)
+        history = await asyncio.to_thread(api.library_history)
+    except EagleUnavailable:
+        return web.json_response({"status": "offline", "host": host_url}, status=503)
+    # Eagle's history can list the same library with and without a trailing separator.
+    libraries = {}
+    for path in ([current] if current else []) + history:
+        path = os.path.normpath(path)
+        libraries.setdefault(os.path.normcase(path), path)
+    return web.json_response({"status": "ok", "current": current, "libraries": list(libraries.values())})
 
 
 async def send_to_eagle_endpoint(request):
-    """Endpoint handler for sending the image and metadata to Eagle."""
-    global _offline_until
+    """Queues the image, then sends everything queued for the library currently open in Eagle."""
 
     try:
         data = await request.json()
@@ -116,7 +215,8 @@ async def send_to_eagle_endpoint(request):
     filename = data.get("filename")
     subfolder = data.get("subfolder") or ""
     image_type = data.get("type") or "output"
-    folder_name = data.get("folder")
+    folder_name = data.get("folder") or ""
+    library = data.get("library") or ""
 
     if not filename:
         print(f"{LOG} request rejected: no filename in payload {data}")
@@ -124,12 +224,7 @@ async def send_to_eagle_endpoint(request):
 
     try:
         current_settings = settings.get_eagle_settings()
-        host_url = current_settings.get('eagle.autosend.hostUrl', 'http://localhost:41595')
-        token = current_settings.get('eagle.autosend.token')
-
-        # Eagle was down a moment ago - skip without touching the network again.
-        if time.monotonic() < _offline_until:
-            return _skipped_response(host_url, filename, quiet=True)
+        api, host_url = eagle_from_settings()
 
         image_path, tried = resolve_image_path(filename, subfolder, image_type)
         if not image_path:
@@ -171,36 +266,25 @@ async def send_to_eagle_endpoint(request):
                 else:  # 'Positive'
                     tags = raw_tags
 
-        item_data = {
+        await asyncio.to_thread(enqueue, {
             "path": image_path,
             "name": filename,
             "annotation": annotation,
             "tags": tags,
-        }
-
-        eagle_api_instance = EagleAPI(base_url=host_url, token=token)
+            "folder": folder_name,
+            "library": library,
+        })
 
         try:
-            folder_id = eagle_api_instance.find_or_create_folder(folder_name) if folder_name else None
-            result = eagle_api_instance.add_item_from_path(item_data, folder_id=folder_id)
+            result = await asyncio.to_thread(flush_queue, api)
         except EagleUnavailable:
-            # Eagle is closed. One tidy line, no traceback, and back off so a
-            # batch of images doesn't repeat this 20 times.
-            _offline_until = time.monotonic() + OFFLINE_BACKOFF_SECONDS
-            print(f"{LOG} Eagle is not running at {host_url} - not sending images "
-                  f"(retrying in {int(OFFLINE_BACKOFF_SECONDS)}s). Skipped: {filename}")
-            return _skipped_response(host_url, filename, quiet=False)
+            return web.json_response({"status": "queued", "reason": "eagle_offline", "host": host_url})
 
-        # Reached Eagle - clear any backoff from an earlier outage.
-        _offline_until = 0.0
-
-        status = (result or {}).get("status")
-        if status != "success":
-            print(f"{LOG} Eagle refused the item: {result}")
-            return web.Response(status=502, text=f"Eagle returned: {result}")
-
-        print(f"{LOG} sent {image_path} -> Eagle (folder={folder_name or 'library root'}, {len(tags)} tags)")
-        return web.Response(status=200, text="Image and metadata sent to Eagle from path")
+        if image_path in result["sent"]:
+            return web.json_response({"status": "sent"})
+        if image_path in result["dropped"]:
+            return web.json_response({"status": "failed"}, status=502)
+        return web.json_response({"status": "queued", "reason": "library_mismatch" if result["current"] else "library_unknown", "current": result["current"]})
     except Exception as e:
         traceback.print_exc()
         return web.Response(status=500, text=f"Error sending to Eagle: {e}")

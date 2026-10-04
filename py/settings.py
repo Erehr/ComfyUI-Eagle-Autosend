@@ -3,7 +3,7 @@ import csv
 import json
 import server
 from aiohttp import web
-from .eagle_autosend import send_to_eagle_endpoint
+from .eagle_autosend import send_to_eagle_endpoint, sync_endpoint, libraries_endpoint
 
 # Set up the API routes
 @server.PromptServer.instance.routes.get("/eagle/get_settings")
@@ -30,6 +30,14 @@ async def list_csv_files(request):
 @server.PromptServer.instance.routes.post("/send-to-eagle")
 async def send_to_eagle(request):
     return await send_to_eagle_endpoint(request)
+
+@server.PromptServer.instance.routes.post("/eagle/sync")
+async def sync_handler(request):
+    return await sync_endpoint(request)
+
+@server.PromptServer.instance.routes.get("/eagle/libraries")
+async def libraries_handler(request):
+    return await libraries_endpoint(request)
 
 # Define the absolute path for the settings file to ensure it's always found.
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")

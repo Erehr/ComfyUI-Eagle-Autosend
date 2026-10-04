@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-eagle-autosend"
 description = "A seamless, node-independent way to automatically send your ComfyUI generations to Eagle, complete with full metadata annotation and tags."
-version = "1.0.3"
+version = "1.1.0"
 license = { file = "LICENSE.txt" }
 dependencies  = []
 

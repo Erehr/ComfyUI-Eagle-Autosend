@@ -39,6 +39,14 @@ class EagleAPI:
             data["folderId"] = folder_id
         return self._send_request("/api/item/addFromPath", method="POST", data=data)
 
+    def current_library(self) -> Optional[str]:
+        """Path of the library open in Eagle, or None if this Eagle version does not report it (pre-4.0)."""
+        data = self._send_request("/api/library/info").get("data", {})
+        return (data.get("library") or {}).get("path")
+
+    def library_history(self) -> List[str]:
+        return self._send_request("/api/library/history").get("data", [])
+
     def find_or_create_folder(self, name_or_id:str) -> str:
         folder = self._find_folder(name_or_id)
         if folder:

@@ -21,6 +21,7 @@ Tired of manually saving and organizing your generated images? This custom node 
 -   **Full Metadata Annotation**: Captures the entire metadata (prompts, seed, sampler, CFG, etc.) and adds it to the image's "Annotation" field in Eagle.
 -   **Intelligent Tagging**: Automatically parses your positive prompt and adds each keyword as a tag to the image in Eagle, making your library instantly searchable.
 -   **Custom Folders**: Use the settings to specify a target folder in your Eagle library. If the folder doesn't exist, it will be created for you.
+-   **Library Selection & Queue**: Pick a target library from Eagle's recent libraries. While Eagle is closed or another library is open, images are queued in `ComfyUI/user/__eagle_autosend/queue.json` and sent on the next generation once the right library is open, or on demand with **Sync now** in the settings. Requires Eagle 4 for library detection.
 
 ## 📦 Installation
 
